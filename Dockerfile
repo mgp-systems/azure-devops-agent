@@ -3,17 +3,15 @@ ARG ARG_UBUNTU_BASE_IMAGE_TAG="20.04"
 
 FROM ${ARG_UBUNTU_BASE_IMAGE}:${ARG_UBUNTU_BASE_IMAGE_TAG}
 WORKDIR /azp
+
 ARG ARG_TARGETARCH=linux-x64
 ARG ARG_VSTS_AGENT_VERSION=4.251.0
 
-
-# To make it easier for build and release pipelines to run apt-get,
-# configure apt to not require confirmation (assume the -y argument by default)
+# Non-interactive APT
 ENV DEBIAN_FRONTEND=noninteractive
 RUN echo "APT::Get::Assume-Yes \"true\";" > /etc/apt/apt.conf.d/90assumeyes
 
-
-# Install required tools
+# Base tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
     apt-utils \
@@ -24,58 +22,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     lsb-release \
     software-properties-common \
+    wget \
+    unzip \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# Upgrade base image
 RUN apt-get update && apt-get -y upgrade
 
+# Install OpenJDK 17
+RUN apt-get update && apt-get install -y openjdk-17-jdk
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
-
-# Download and extract the Azure DevOps Agent
-RUN printenv \
-    && echo "Downloading Azure DevOps Agent version ${ARG_VSTS_AGENT_VERSION} for ${ARG_TARGETARCH}"
+# Download and extract Azure DevOps Agent
+RUN echo "Downloading Azure DevOps Agent version ${ARG_VSTS_AGENT_VERSION} for ${ARG_TARGETARCH}"
 RUN curl -LsS https://vstsagentpackage.azureedge.net/agent/${ARG_VSTS_AGENT_VERSION}/vsts-agent-${ARG_TARGETARCH}-${ARG_VSTS_AGENT_VERSION}.tar.gz | tar -xz
-
-
 
 # Install Azure CLI & Azure DevOps extension
 RUN curl -LsS https://aka.ms/InstallAzureCLIDeb | bash \
+    && az extension add --name azure-devops \
     && rm -rf /var/lib/apt/lists/*
-RUN az extension add --name azure-devops
-
-
-
-# Install required tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    unzip
-
-
 
 # Install yq
 RUN wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
     && mv ./yq_linux_amd64 /usr/bin/yq \
     && chmod +x /usr/bin/yq
 
-
-
 # Install Helm
 RUN curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
 
-
-
-# Install Kubectl
+# Install kubectl
 RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
     && mv ./kubectl /usr/bin/kubectl \
     && chmod +x /usr/bin/kubectl
 
-
-
-# Install Powershell Core
+# Install PowerShell
 RUN wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb" \
     && dpkg -i packages-microsoft-prod.deb
 RUN apt-get update \
     && apt-get install -y powershell
-
-
 
 # Install Docker CLI
 RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
@@ -85,32 +71,20 @@ RUN echo \
 RUN apt-get update \
     && apt-get install -y docker-ce-cli
 
-
-
-# do apt-get upgrade
-RUN apt-get update && apt-get -y upgrade
-
-
-
 # Copy start script
 COPY ./start.sh .
 RUN chmod +x start.sh
 
-
-
 # Create non-root user under docker group
-RUN useradd -m -s /bin/bash -u "1000" azdouser
-RUN groupadd docker && usermod -aG docker azdouser
-RUN apt-get update \
-    && apt-get install -y sudo \
+RUN useradd -m -s /bin/bash -u "1000" azdouser \
+    && groupadd docker && usermod -aG docker azdouser \
     && echo azdouser ALL=\(root\) NOPASSWD:ALL >> /etc/sudoers
 
-RUN sudo chown -R azdouser /home/azdouser
-RUN sudo chown -R azdouser /azp
-RUN sudo chown -R azdouser /var/run/docker.sock || true
+# Set ownership
+RUN sudo chown -R azdouser /home/azdouser \
+    && sudo chown -R azdouser /azp \
+    && sudo chown -R azdouser /var/run/docker.sock || true
+
 USER azdouser
-
-
-# cd to /azp and run start.sh
 WORKDIR /azp
 ENTRYPOINT ["./start.sh"]
